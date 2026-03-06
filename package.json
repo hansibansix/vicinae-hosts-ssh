@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/vicinaehq/vicinae/refs/heads/main/extra/schemas/extension.json",
+  "name": "hosts-ssh",
+  "title": "Hosts SSH",
+  "description": "Quick SSH launcher for hosts from /etc/hosts with git repo browsing and cloning",
+  "categories": ["System", "Developer Tools"],
+  "license": "MIT",
+  "author": "Hansi",
+  "contributors": [],
+  "pastContributors": [],
+  "icon": "extension_icon.png",
+  "commands": [
+    {
+      "name": "hosts",
+      "title": "SSH Hosts",
+      "description": "Browse and connect to SSH hosts from /etc/hosts",
+      "mode": "view"
+    },
+    {
+      "name": "repos",
+      "title": "Git Repos",
+      "description": "Search git repositories across all SSH hosts",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "terminal",
+      "title": "Terminal",
+      "description": "Terminal command for SSH. Empty uses the default. Examples: 'kitty -1 kitten', 'foot -e'",
+      "required": false,
+      "type": "textfield",
+      "default": ""
+    },
+    {
+      "name": "sshUser",
+      "title": "SSH User",
+      "description": "Default SSH username. Leave empty to use system default",
+      "required": false,
+      "type": "textfield",
+      "default": ""
+    },
+    {
+      "name": "hostsFile",
+      "title": "Hosts File",
+      "description": "Path to the hosts file",
+      "required": false,
+      "type": "textfield",
+      "default": "/etc/hosts"
+    },
+    {
+      "name": "hostPrefix",
+      "title": "Host Prefix",
+      "description": "Only show hosts starting with this prefix. Leave empty for all hosts",
+      "required": false,
+      "type": "textfield",
+      "default": ""
+    },
+    {
+      "name": "cloneDirectory",
+      "title": "Clone Directory",
+      "description": "Directory to clone repositories into. Empty uses home directory",
+      "required": false,
+      "type": "directory",
+      "default": ""
+    }
+  ],
+  "scripts": {
+    "build": "vici build",
+    "dev": "vici develop"
+  },
+  "dependencies": {
+    "@vicinae/api": "^0.16.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}
