@@ -17,11 +17,14 @@ import {
   fetchGitRepos,
   repoFolderName,
   getCachedRepos,
-  setCachedRepos,
+  updateRepoCache,
+  allRepoNames,
+  fetchAllHostRepos,
   getCanonicalHosts,
   type Host,
   type Repo,
 } from "./utils";
+
 import { SettingsForm } from "./settings";
 import { repoIcon, repoAccessories, useRepoActions } from "./hooks";
 
@@ -50,9 +53,7 @@ function HostReposView({
 
         if (repoList.length > 0) {
           setRepos(repoList);
-          const cached = getCachedRepos();
-          cached[host.name] = repoList;
-          setCachedRepos(cached);
+          updateRepoCache(host.name, repoList);
           showToast({
             style: Toast.Style.Success,
             title: `Found ${repoList.length} repos`,
@@ -80,9 +81,7 @@ function HostReposView({
     const fresh = await fetchGitRepos(host.name);
     setRepos(fresh);
     if (fresh.length > 0) {
-      const cached = getCachedRepos();
-      cached[host.name] = fresh;
-      setCachedRepos(cached);
+      updateRepoCache(host.name, fresh);
     }
     setIsLoading(false);
     await batchCheckExists(fresh);
@@ -193,45 +192,13 @@ const HostsListInner = React.memo(function HostsListInner({
     fetchedAllRef.current = true;
 
     async function fetchAll() {
-      const canonical = getCanonicalHosts(hosts);
-      const cached = getCachedRepos();
-      const toFetch = [...canonical].filter(
-        (h) => !cached[h] || cached[h].length === 0,
-      );
-
-      if (toFetch.length === 0) {
-        setReposMap({ ...cached });
-        return;
-      }
-
       setFetchingAllRepos(true);
-      const allRepos = { ...cached };
-      const CONCURRENCY = 8;
-
-      for (let i = 0; i < toFetch.length; i += CONCURRENCY) {
-        const batch = toFetch.slice(i, i + CONCURRENCY);
-        const results = await Promise.all(
-          batch.map(async (hostname) => ({
-            hostname,
-            repos: await fetchGitRepos(hostname),
-          })),
-        );
-        for (const { hostname, repos } of results) {
-          if (repos.length > 0) allRepos[hostname] = repos;
-        }
-        setReposMap({ ...allRepos });
-        setCachedRepos(allRepos);
-      }
-
+      const allRepos = await fetchAllHostRepos(hosts, {
+        onBatchDone: (repos) => setReposMap(repos),
+      });
+      setReposMap({ ...allRepos });
       setFetchingAllRepos(false);
-
-      const allRepoNames: string[] = [];
-      for (const hostname in allRepos) {
-        for (const repo of allRepos[hostname]) {
-          allRepoNames.push(repo);
-        }
-      }
-      await batchCheckExists(allRepoNames);
+      await batchCheckExists(allRepoNames(allRepos));
     }
 
     fetchAll();

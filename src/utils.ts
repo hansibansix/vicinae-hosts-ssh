@@ -311,6 +311,22 @@ export function setCachedRepos(repos: Record<string, string[]>): void {
   repoCache.set(REPO_CACHE_KEY, JSON.stringify(repos));
 }
 
+export function updateRepoCache(hostname: string, repos: string[]): void {
+  const cached = getCachedRepos();
+  cached[hostname] = repos;
+  setCachedRepos(cached);
+}
+
+export function allRepoNames(reposMap: Record<string, string[]>): string[] {
+  const names: string[] = [];
+  for (const hostname in reposMap) {
+    for (const repo of reposMap[hostname]) {
+      names.push(repo);
+    }
+  }
+  return names;
+}
+
 export function getCanonicalHosts(hosts: Host[]): Set<string> {
   const ipToHost: Record<string, string> = {};
   for (const host of hosts) {
@@ -319,4 +335,42 @@ export function getCanonicalHosts(hosts: Host[]): Set<string> {
     }
   }
   return new Set(Object.values(ipToHost));
+}
+
+const CONCURRENCY = 8;
+
+export async function fetchAllHostRepos(
+  hosts: Host[],
+  callbacks?: {
+    shouldCancel?: () => boolean;
+    onBatchDone?: (allRepos: Record<string, string[]>, completed: number, total: number) => void;
+  },
+): Promise<Record<string, string[]>> {
+  const canonical = getCanonicalHosts(hosts);
+  const cached = getCachedRepos();
+  const toFetch = [...canonical].filter(
+    (h) => !cached[h] || cached[h].length === 0,
+  );
+
+  const allRepos = { ...cached };
+
+  let completed = 0;
+  for (let i = 0; i < toFetch.length; i += CONCURRENCY) {
+    if (callbacks?.shouldCancel?.()) return allRepos;
+    const batch = toFetch.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (hostname) => ({
+        hostname,
+        repos: await fetchGitRepos(hostname),
+      })),
+    );
+    for (const { hostname, repos } of results) {
+      if (repos.length > 0) allRepos[hostname] = repos;
+    }
+    completed += batch.length;
+    setCachedRepos(allRepos);
+    callbacks?.onBatchDone?.({ ...allRepos }, completed, toFetch.length);
+  }
+
+  return allRepos;
 }

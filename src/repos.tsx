@@ -10,10 +10,10 @@ import {
 import {
   parseHostsFile,
   connectSSH,
-  fetchGitRepos,
   repoFolderName,
   getCachedRepos,
-  setCachedRepos,
+  allRepoNames,
+  fetchAllHostRepos,
   getCanonicalHosts,
   type Host,
   type Repo,
@@ -39,59 +39,26 @@ export default function ReposCommand() {
       if (cancelled) return;
       setHosts(parsedHosts);
 
-      const canonical = getCanonicalHosts(parsedHosts);
       const cached = getCachedRepos();
-
-      const toFetch = [...canonical].filter(
-        (h) => !cached[h] || cached[h].length === 0,
-      );
-
       if (Object.keys(cached).length > 0) {
         setReposMap(cached);
-        setIsLoading(toFetch.length > 0);
       }
 
-      const CONCURRENCY = 8;
-      let completed = 0;
-      const allRepos = { ...cached };
-
-      for (let i = 0; i < toFetch.length; i += CONCURRENCY) {
-        if (cancelled) return;
-        const batch = toFetch.slice(i, i + CONCURRENCY);
-
-        setFetchProgress(
-          `Scanning hosts ${completed + 1}–${Math.min(completed + batch.length, toFetch.length)} of ${toFetch.length}`,
-        );
-
-        const results = await Promise.all(
-          batch.map(async (hostname) => ({
-            hostname,
-            repos: await fetchGitRepos(hostname),
-          })),
-        );
-
-        for (const { hostname, repos } of results) {
-          if (repos.length > 0) allRepos[hostname] = repos;
-        }
-
-        completed += batch.length;
-        if (!cancelled) {
-          setReposMap({ ...allRepos });
-          setCachedRepos(allRepos);
-        }
-      }
+      const allRepos = await fetchAllHostRepos(parsedHosts, {
+        shouldCancel: () => cancelled,
+        onBatchDone: (repos, completed, total) => {
+          if (!cancelled) {
+            setReposMap(repos);
+            setFetchProgress(`Scanning hosts... ${completed} of ${total}`);
+          }
+        },
+      });
 
       if (!cancelled) {
+        setReposMap({ ...allRepos });
         setIsLoading(false);
         setFetchProgress("");
-
-        const allRepoNames: string[] = [];
-        for (const hostname in allRepos) {
-          for (const repo of allRepos[hostname]) {
-            allRepoNames.push(repo);
-          }
-        }
-        await batchCheckExists(allRepoNames);
+        await batchCheckExists(allRepoNames(allRepos));
       }
     }
 

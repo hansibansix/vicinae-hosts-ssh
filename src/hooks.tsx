@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Color, Icon, List, showToast, Toast } from "@vicinae/api";
 import { cloneRepo, repoExists, repoFolderName } from "./utils";
 
@@ -23,15 +23,19 @@ export function repoAccessories(
 export function useRepoActions() {
   const [existsMap, setExistsMap] = useState<Record<string, boolean>>({});
   const [cloningSet, setCloningSet] = useState<Set<string>>(new Set());
+  const existsRef = useRef(existsMap);
+  existsRef.current = existsMap;
+  const cloningRef = useRef(cloningSet);
+  cloningRef.current = cloningSet;
 
   const handleClone = useCallback(
     async (hostname: string, repoName: string) => {
       const folder = repoFolderName(repoName);
-      if (existsMap[folder]) {
+      if (existsRef.current[folder]) {
         showToast({ title: `${folder} already exists` });
         return;
       }
-      if (cloningSet.has(folder)) {
+      if (cloningRef.current.has(folder)) {
         showToast({ title: `Already cloning ${folder}` });
         return;
       }
@@ -58,7 +62,7 @@ export function useRepoActions() {
         return next;
       });
     },
-    [existsMap, cloningSet],
+    [],
   );
 
   const batchCheckExists = useCallback(
