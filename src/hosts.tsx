@@ -24,9 +24,137 @@ import {
 import { SettingsForm } from "./settings";
 import { repoIcon, repoAccessories, useRepoActions } from "./hooks";
 
-type ViewState =
-  | { mode: "hosts" }
-  | { mode: "repos"; host: Host; initialRepos: string[] };
+function HostReposView({
+  host,
+  initialRepos,
+}: {
+  host: Host;
+  initialRepos?: string[];
+}) {
+  const [repos, setRepos] = useState<string[]>(initialRepos || []);
+  const [isLoading, setIsLoading] = useState(!initialRepos?.length);
+  const [searchText, setSearchText] = useState("");
+  const { existsMap, cloningSet, handleClone, batchCheckExists } = useRepoActions();
+
+  useEffect(() => {
+    async function load() {
+      let repoList = initialRepos || [];
+
+      if (!repoList.length) {
+        showToast({ title: `Fetching repos from ${host.name}...` });
+        repoList = await fetchGitRepos(host.name);
+
+        if (repoList.length > 0) {
+          setRepos(repoList);
+          const cached = getCachedRepos();
+          cached[host.name] = repoList;
+          setCachedRepos(cached);
+          showToast({
+            style: Toast.Style.Success,
+            title: `Found ${repoList.length} repos`,
+          });
+        } else {
+          showToast({
+            style: Toast.Style.Failure,
+            title: `No repos found on ${host.name}`,
+          });
+        }
+      }
+
+      setIsLoading(false);
+
+      if (repoList.length > 0) {
+        await batchCheckExists(repoList);
+      }
+    }
+    load();
+  }, []);
+
+  const handleRefresh = useCallback(async () => {
+    setIsLoading(true);
+    showToast({ title: `Refreshing repos from ${host.name}...` });
+    const fresh = await fetchGitRepos(host.name);
+    setRepos(fresh);
+    if (fresh.length > 0) {
+      const cached = getCachedRepos();
+      cached[host.name] = fresh;
+      setCachedRepos(cached);
+    }
+    setIsLoading(false);
+    await batchCheckExists(fresh);
+  }, [host.name, batchCheckExists]);
+
+  const filteredRepos = useMemo(() => {
+    if (!searchText.trim()) return repos;
+    const q = searchText.toLowerCase();
+    return repos.filter((r) => r.toLowerCase().includes(q));
+  }, [repos, searchText]);
+
+  return (
+    <List
+      navigationTitle={`${host.name} — Git Repos`}
+      isLoading={isLoading}
+      searchText={searchText}
+      onSearchTextChange={setSearchText}
+      searchBarPlaceholder={`Search ${repos.length} repos on ${host.name}...`}
+    >
+      {!isLoading && repos.length === 0 && (
+        <List.EmptyView
+          title="No Repositories Found"
+          description={`No git repos found on ${host.name}`}
+          icon={{ source: Icon.XMarkCircle, tintColor: Color.SecondaryText }}
+        />
+      )}
+      {filteredRepos.map((repo) => {
+        const folder = repoFolderName(repo);
+        const exists = existsMap[folder] || false;
+        const cloning = cloningSet.has(folder);
+
+        return (
+          <List.Item
+            key={repo}
+            id={repo}
+            title={repo}
+            icon={repoIcon(exists, cloning)}
+            accessories={repoAccessories(exists, cloning)}
+            actions={
+              <ActionPanel>
+                {!exists && !cloning && (
+                  <Action
+                    title="Clone Repository"
+                    icon={Icon.Download}
+                    onAction={() => handleClone(host.name, repo)}
+                  />
+                )}
+                <Action.CopyToClipboard
+                  title="Copy Clone URL"
+                  content={`git@${host.name}:${repo}`}
+                />
+                <Action
+                  title="Connect SSH"
+                  icon={Icon.Terminal}
+                  onAction={() => connectSSH(host.name)}
+                />
+                <Action
+                  title="Refresh Repos"
+                  icon={Icon.ArrowClockwise}
+                  onAction={handleRefresh}
+                  shortcut={{ modifiers: ["cmd"], key: "r" }}
+                />
+                <Action.Push
+                  title="Extension Settings"
+                  icon={Icon.Gear}
+                  target={<SettingsForm />}
+                  shortcut={{ modifiers: ["cmd"], key: "," }}
+                />
+              </ActionPanel>
+            }
+          />
+        );
+      })}
+    </List>
+  );
+}
 
 export default function HostsCommand() {
   const [searchText, setSearchText] = useState("");
@@ -37,17 +165,7 @@ export default function HostsCommand() {
   );
   const [fetchingAllRepos, setFetchingAllRepos] = useState(false);
   const fetchedAllRef = useRef(false);
-
-  const [view, setView] = useState<ViewState>({ mode: "hosts" });
-  const savedSearchRef = useRef("");
-
-  // Repo state for global repo search (hosts mode with "!" prefix)
-  const globalRepo = useRepoActions();
-  // Repo state for per-host repo view
-  const hostRepo = useRepoActions();
-
-  const [hostRepos, setHostRepos] = useState<string[]>([]);
-  const [hostReposLoading, setHostReposLoading] = useState(false);
+  const { existsMap, cloningSet, handleClone, batchCheckExists } = useRepoActions();
 
   useEffect(() => {
     parseHostsFile().then((result) => {
@@ -56,82 +174,7 @@ export default function HostsCommand() {
     });
   }, []);
 
-  // Load repos when entering per-host repo view
-  useEffect(() => {
-    if (view.mode !== "repos") return;
-
-    const { host, initialRepos } = view;
-    let repoList = initialRepos;
-    setHostRepos(repoList);
-
-    if (repoList.length > 0) {
-      setHostReposLoading(false);
-      hostRepo.batchCheckExists(repoList);
-      return;
-    }
-
-    setHostReposLoading(true);
-
-    (async () => {
-      showToast({ title: `Fetching repos from ${host.name}...` });
-      repoList = await fetchGitRepos(host.name);
-
-      if (repoList.length > 0) {
-        setHostRepos(repoList);
-        const cached = getCachedRepos();
-        cached[host.name] = repoList;
-        setCachedRepos(cached);
-        showToast({
-          style: Toast.Style.Success,
-          title: `Found ${repoList.length} repos`,
-        });
-      } else {
-        showToast({
-          style: Toast.Style.Failure,
-          title: `No repos found on ${host.name}`,
-        });
-      }
-
-      setHostReposLoading(false);
-      if (repoList.length > 0) {
-        await hostRepo.batchCheckExists(repoList);
-      }
-    })();
-  }, [view.mode === "repos" ? (view as any).host.name : null]);
-
-  const openRepoView = useCallback(
-    (host: Host) => {
-      savedSearchRef.current = searchText;
-      setSearchText("");
-      setView({ mode: "repos", host, initialRepos: reposMap[host.name] || [] });
-    },
-    [searchText, reposMap],
-  );
-
-  const goBack = useCallback(() => {
-    setView({ mode: "hosts" });
-    setSearchText(savedSearchRef.current);
-    setHostRepos([]);
-  }, []);
-
-  const handleRefresh = useCallback(async () => {
-    if (view.mode !== "repos") return;
-    const { host } = view;
-    setHostReposLoading(true);
-    showToast({ title: `Refreshing repos from ${host.name}...` });
-    const fresh = await fetchGitRepos(host.name);
-    setHostRepos(fresh);
-    if (fresh.length > 0) {
-      const cached = getCachedRepos();
-      cached[host.name] = fresh;
-      setCachedRepos(cached);
-    }
-    setHostReposLoading(false);
-    await hostRepo.batchCheckExists(fresh);
-  }, [view, hostRepo.batchCheckExists]);
-
-  // Global repo search
-  const isRepoSearch = view.mode === "hosts" && searchText.startsWith("!");
+  const isRepoSearch = searchText.startsWith("!");
   const repoQuery = isRepoSearch ? searchText.slice(1).toLowerCase() : "";
 
   useEffect(() => {
@@ -177,14 +220,14 @@ export default function HostsCommand() {
           allRepoNames.push(repo);
         }
       }
-      await globalRepo.batchCheckExists(allRepoNames);
+      await batchCheckExists(allRepoNames);
     }
 
     fetchAll();
   }, [isRepoSearch, hosts]);
 
   const filteredHosts = useMemo(() => {
-    if (view.mode !== "hosts" || isRepoSearch) return [];
+    if (isRepoSearch) return [];
     if (!searchText.trim()) return hosts;
     const q = searchText.toLowerCase();
     return hosts.filter(
@@ -193,9 +236,9 @@ export default function HostsCommand() {
         h.ip.toLowerCase().includes(q) ||
         h.aliases.some((a) => a.toLowerCase().includes(q)),
     );
-  }, [hosts, searchText, isRepoSearch, view.mode]);
+  }, [hosts, searchText, isRepoSearch]);
 
-  const filteredGlobalRepos: Repo[] = useMemo(() => {
+  const filteredRepos: Repo[] = useMemo(() => {
     if (!isRepoSearch) return [];
     const canonical =
       hosts.length > 0 ? getCanonicalHosts(hosts) : new Set<string>();
@@ -218,95 +261,12 @@ export default function HostsCommand() {
     return results;
   }, [isRepoSearch, repoQuery, reposMap, hosts]);
 
-  const filteredHostRepos = useMemo(() => {
-    if (view.mode !== "repos" || !searchText.trim()) return hostRepos;
-    const q = searchText.toLowerCase();
-    return hostRepos.filter((r) => r.toLowerCase().includes(q));
-  }, [hostRepos, searchText, view.mode]);
-
   const totalRepos = useMemo(() => {
     let count = 0;
     for (const h in reposMap) count += reposMap[h].length;
     return count;
   }, [reposMap]);
 
-  // Per-host repo view
-  if (view.mode === "repos") {
-    const { host } = view;
-
-    return (
-      <List
-        navigationTitle={`${host.name} — Git Repos`}
-        isLoading={hostReposLoading}
-        searchText={searchText}
-        onSearchTextChange={setSearchText}
-        searchBarPlaceholder={`Search ${hostRepos.length} repos on ${host.name}...`}
-      >
-        {!hostReposLoading && hostRepos.length === 0 && (
-          <List.EmptyView
-            title="No Repositories Found"
-            description={`No git repos found on ${host.name}`}
-            icon={{ source: Icon.XMarkCircle, tintColor: Color.SecondaryText }}
-          />
-        )}
-        {filteredHostRepos.map((repo) => {
-          const folder = repoFolderName(repo);
-          const exists = hostRepo.existsMap[folder] || false;
-          const cloning = hostRepo.cloningSet.has(folder);
-
-          return (
-            <List.Item
-              key={repo}
-              id={repo}
-              title={repo}
-              icon={repoIcon(exists, cloning)}
-              accessories={repoAccessories(exists, cloning)}
-              actions={
-                <ActionPanel>
-                  {!exists && !cloning && (
-                    <Action
-                      title="Clone Repository"
-                      icon={Icon.Download}
-                      onAction={() => hostRepo.handleClone(host.name, repo)}
-                    />
-                  )}
-                  <Action
-                    title="Back to Hosts"
-                    icon={Icon.ArrowLeft}
-                    onAction={goBack}
-                    shortcut={{ modifiers: ["cmd"], key: "arrowLeft" }}
-                  />
-                  <Action.CopyToClipboard
-                    title="Copy Clone URL"
-                    content={`git@${host.name}:${repo}`}
-                  />
-                  <Action
-                    title="Connect SSH"
-                    icon={Icon.Terminal}
-                    onAction={() => connectSSH(host.name)}
-                  />
-                  <Action
-                    title="Refresh Repos"
-                    icon={Icon.ArrowClockwise}
-                    onAction={handleRefresh}
-                    shortcut={{ modifiers: ["cmd"], key: "r" }}
-                  />
-                  <Action.Push
-                    title="Extension Settings"
-                    icon={Icon.Gear}
-                    target={<SettingsForm />}
-                    shortcut={{ modifiers: ["cmd"], key: "," }}
-                  />
-                </ActionPanel>
-              }
-            />
-          );
-        })}
-      </List>
-    );
-  }
-
-  // Hosts view (with global repo search)
   return (
     <List
       isLoading={isLoading || fetchingAllRepos}
@@ -316,7 +276,7 @@ export default function HostsCommand() {
     >
       {isRepoSearch ? (
         <>
-          {filteredGlobalRepos.length === 0 && !fetchingAllRepos && (
+          {filteredRepos.length === 0 && !fetchingAllRepos && (
             <List.EmptyView
               title={repoQuery ? "No Matching Repos" : "Global Repo Search"}
               description={
@@ -327,9 +287,9 @@ export default function HostsCommand() {
               icon={{ source: Icon.MagnifyingGlass, tintColor: Color.Purple }}
             />
           )}
-          {filteredGlobalRepos.map((repo) => {
-            const exists = globalRepo.existsMap[repo.repoFolder] || false;
-            const cloning = globalRepo.cloningSet.has(repo.repoFolder);
+          {filteredRepos.map((repo) => {
+            const exists = existsMap[repo.repoFolder] || false;
+            const cloning = cloningSet.has(repo.repoFolder);
 
             return (
               <List.Item
@@ -349,7 +309,7 @@ export default function HostsCommand() {
                         title="Clone Repository"
                         icon={Icon.Download}
                         onAction={() =>
-                          globalRepo.handleClone(repo.hostname, repo.repoName)
+                          handleClone(repo.hostname, repo.repoName)
                         }
                       />
                     )}
@@ -425,14 +385,19 @@ export default function HostsCommand() {
                     icon={Icon.Terminal}
                     onAction={() => connectSSH(host.name)}
                   />
-                  <Action
+                  <Action.Push
                     title={
                       hostRepos.length > 0
                         ? `View Git Repos (${hostRepos.length})`
                         : "Fetch Git Repos"
                     }
                     icon={Icon.CodeBlock}
-                    onAction={() => openRepoView(host)}
+                    target={
+                      <HostReposView
+                        host={host}
+                        initialRepos={hostRepos}
+                      />
+                    }
                     shortcut={{ modifiers: ["ctrl"], key: "return" }}
                   />
                   <Action.CopyToClipboard
