@@ -8,6 +8,7 @@ import {
   List,
   showToast,
   Toast,
+  useNavigation,
 } from "@vicinae/api";
 import {
   parseHostsFile,
@@ -24,6 +25,8 @@ import {
 import { SettingsForm } from "./settings";
 import { repoIcon, repoAccessories, useRepoActions } from "./hooks";
 
+type PushRef = React.RefObject<((node: React.ReactNode) => void) | null>;
+
 function HostReposView({
   host,
   initialRepos,
@@ -35,6 +38,9 @@ function HostReposView({
   const [isLoading, setIsLoading] = useState(!initialRepos?.length);
   const [searchText, setSearchText] = useState("");
   const { existsMap, cloningSet, handleClone, batchCheckExists } = useRepoActions();
+  const { push } = useNavigation();
+  const pushRef = useRef(push);
+  pushRef.current = push;
 
   useEffect(() => {
     async function load() {
@@ -141,10 +147,10 @@ function HostReposView({
                   onAction={handleRefresh}
                   shortcut={{ modifiers: ["cmd"], key: "r" }}
                 />
-                <Action.Push
+                <Action
                   title="Extension Settings"
                   icon={Icon.Gear}
-                  target={<SettingsForm />}
+                  onAction={() => pushRef.current?.(<SettingsForm />)}
                   shortcut={{ modifiers: ["cmd"], key: "," }}
                 />
               </ActionPanel>
@@ -156,6 +162,103 @@ function HostReposView({
   );
 }
 
+// Memoized host list item — prevents re-render when navigation context changes on pop
+const HostListItem = React.memo(function HostListItem({
+  host,
+  hostRepos,
+  pushRef,
+}: {
+  host: Host;
+  hostRepos: string[];
+  pushRef: PushRef;
+}) {
+  const aliasText =
+    host.aliases.length > 0 ? host.aliases.join(", ") : undefined;
+
+  return (
+    <List.Item
+      id={host.name}
+      title={host.name}
+      subtitle={host.ip}
+      keywords={host.aliases}
+      icon={{
+        source: Icon.Network,
+        tintColor: Color.Blue,
+      }}
+      accessories={[
+        ...(aliasText
+          ? [
+              {
+                text: {
+                  value: aliasText,
+                  color: Color.SecondaryText,
+                },
+                tooltip: "Aliases",
+              },
+            ]
+          : []),
+        ...(hostRepos.length > 0
+          ? [
+              {
+                tag: {
+                  value: `${hostRepos.length} repos`,
+                  color: Color.Purple,
+                },
+                icon: {
+                  source: Icon.CodeBlock,
+                  tintColor: Color.Purple,
+                } as Image.ImageLike,
+              },
+            ]
+          : []),
+      ]}
+      actions={
+        <ActionPanel>
+          <Action
+            title="Connect SSH"
+            icon={Icon.Terminal}
+            onAction={() => connectSSH(host.name)}
+          />
+          <Action
+            title={
+              hostRepos.length > 0
+                ? `View Git Repos (${hostRepos.length})`
+                : "Fetch Git Repos"
+            }
+            icon={Icon.CodeBlock}
+            onAction={() =>
+              pushRef.current?.(
+                <HostReposView host={host} initialRepos={hostRepos} />,
+              )
+            }
+            shortcut={{ modifiers: ["ctrl"], key: "return" }}
+          />
+          <Action.CopyToClipboard
+            title="Copy Hostname"
+            content={host.name}
+            shortcut={{ modifiers: ["cmd"], key: "c" }}
+          />
+          <Action.CopyToClipboard
+            title="Copy IP Address"
+            content={host.ip}
+            shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
+          />
+          <Action.CopyToClipboard
+            title="Copy SSH Command"
+            content={`ssh ${sshTarget(host.name)}`}
+          />
+          <Action
+            title="Extension Settings"
+            icon={Icon.Gear}
+            onAction={() => pushRef.current?.(<SettingsForm />)}
+            shortcut={{ modifiers: ["cmd"], key: "," }}
+          />
+        </ActionPanel>
+      }
+    />
+  );
+});
+
 export default function HostsCommand() {
   const [searchText, setSearchText] = useState("");
   const [hosts, setHosts] = useState<Host[]>([]);
@@ -166,6 +269,12 @@ export default function HostsCommand() {
   const [fetchingAllRepos, setFetchingAllRepos] = useState(false);
   const fetchedAllRef = useRef(false);
   const { existsMap, cloningSet, handleClone, batchCheckExists } = useRepoActions();
+
+  // Get push via useNavigation but store in a ref so list items
+  // don't need to subscribe to navigation context (avoids re-render on pop)
+  const { push } = useNavigation();
+  const pushRef = useRef(push);
+  pushRef.current = push;
 
   useEffect(() => {
     parseHostsFile().then((result) => {
@@ -322,10 +431,10 @@ export default function HostsCommand() {
                       icon={Icon.Terminal}
                       onAction={() => connectSSH(repo.hostname)}
                     />
-                    <Action.Push
+                    <Action
                       title="Extension Settings"
                       icon={Icon.Gear}
-                      target={<SettingsForm />}
+                      onAction={() => pushRef.current?.(<SettingsForm />)}
                       shortcut={{ modifiers: ["cmd"], key: "," }}
                     />
                   </ActionPanel>
@@ -335,96 +444,14 @@ export default function HostsCommand() {
           })}
         </>
       ) : (
-        filteredHosts.map((host) => {
-          const hostRepos = reposMap[host.name] || [];
-          const aliasText =
-            host.aliases.length > 0 ? host.aliases.join(", ") : undefined;
-
-          return (
-            <List.Item
-              key={host.name}
-              id={host.name}
-              title={host.name}
-              subtitle={host.ip}
-              keywords={host.aliases}
-              icon={{
-                source: Icon.Network,
-                tintColor: Color.Blue,
-              }}
-              accessories={[
-                ...(aliasText
-                  ? [
-                      {
-                        text: {
-                          value: aliasText,
-                          color: Color.SecondaryText,
-                        },
-                        tooltip: "Aliases",
-                      },
-                    ]
-                  : []),
-                ...(hostRepos.length > 0
-                  ? [
-                      {
-                        tag: {
-                          value: `${hostRepos.length} repos`,
-                          color: Color.Purple,
-                        },
-                        icon: {
-                          source: Icon.CodeBlock,
-                          tintColor: Color.Purple,
-                        } as Image.ImageLike,
-                      },
-                    ]
-                  : []),
-              ]}
-              actions={
-                <ActionPanel>
-                  <Action
-                    title="Connect SSH"
-                    icon={Icon.Terminal}
-                    onAction={() => connectSSH(host.name)}
-                  />
-                  <Action.Push
-                    title={
-                      hostRepos.length > 0
-                        ? `View Git Repos (${hostRepos.length})`
-                        : "Fetch Git Repos"
-                    }
-                    icon={Icon.CodeBlock}
-                    target={
-                      <HostReposView
-                        host={host}
-                        initialRepos={hostRepos}
-                      />
-                    }
-                    shortcut={{ modifiers: ["ctrl"], key: "return" }}
-                  />
-                  <Action.CopyToClipboard
-                    title="Copy Hostname"
-                    content={host.name}
-                    shortcut={{ modifiers: ["cmd"], key: "c" }}
-                  />
-                  <Action.CopyToClipboard
-                    title="Copy IP Address"
-                    content={host.ip}
-                    shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
-                  />
-                  <Action.CopyToClipboard
-                    title="Copy SSH Command"
-                    content={`ssh ${sshTarget(host.name)}`}
-                  />
-                  <Action.Push
-                    title="Extension Settings"
-                    icon={Icon.Gear}
-                    target={<SettingsForm />}
-                    shortcut={{ modifiers: ["cmd"], key: "," }}
-                  />
-                </ActionPanel>
-              }
-            />
-          );
-        })
+        filteredHosts.map((host) => (
+          <HostListItem
+            key={host.name}
+            host={host}
+            hostRepos={reposMap[host.name] || []}
+            pushRef={pushRef}
+          />
+        ))
       )}
     </List>
   );
